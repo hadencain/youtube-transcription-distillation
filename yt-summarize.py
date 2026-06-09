@@ -7,15 +7,20 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT = SCRIPT_DIR / "youtube_summary"
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+except ImportError:
+    YouTubeTranscriptApi = None
+
+VAULT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+SUMMARY_ROOT = VAULT_ROOT / "main" / "AIOS" / "youtube_summary"
 
 CLASSIFICATION_PROMPT = (
     "Analyze all sources and respond in exactly this format with no extra text:\n"
@@ -95,6 +100,57 @@ PROMPT_LIBRARY = {
     ),
 }
 
+ACTION_PROMPT_LIBRARY = {
+    "tutorial": (
+        "Based on this synthesis note, create an implementation checklist. Structure it as:\n"
+        "1. A one-sentence statement of what you are implementing\n"
+        "2. Ordered concrete steps to apply what was learned — specific and actionable\n"
+        "3. Prerequisites or setup required before starting\n"
+        "4. Success criteria — how you will know it worked\n\n"
+        "Write for doing, not reading. No filler. No intro or outro sentences about the note itself."
+    ),
+    "lecture": (
+        "Based on this synthesis note, create a concept application guide. Structure it as:\n"
+        "1. The core framework restated in one sentence\n"
+        "2. Where and how to apply each key concept in practice\n"
+        "3. Specific situations where this knowledge changes a decision or action\n"
+        "4. One immediate experiment or test to try\n\n"
+        "Write for application, not review. No intro or outro sentences about the note itself."
+    ),
+    "interview": (
+        "Based on this synthesis note, create a follow-up research map. Structure it as:\n"
+        "1. The most important insight worth pursuing further\n"
+        "2. Specific people, tools, books, or resources to investigate\n"
+        "3. Open questions raised by the content\n"
+        "4. One concrete next step\n\n"
+        "Write for action, not summary. No intro or outro sentences about the note itself."
+    ),
+    "narrative": (
+        "Based on this synthesis note, extract actionable lessons. Structure it as:\n"
+        "1. What to replicate — patterns or decisions worth adopting\n"
+        "2. What to avoid — pitfalls or anti-patterns demonstrated\n"
+        "3. What generalizes beyond this specific case\n"
+        "4. One immediate thing to apply or test\n\n"
+        "Write for pattern recognition. No intro or outro sentences about the note itself."
+    ),
+    "opinion": (
+        "Based on this synthesis note, create a position evaluation. Structure it as:\n"
+        "1. The central claim, restated plainly\n"
+        "2. Where you agree and why\n"
+        "3. Where you disagree or need more evidence\n"
+        "4. What to investigate to resolve the uncertainty\n\n"
+        "Separate claim from evidence. No intro or outro sentences about the note itself."
+    ),
+    "mixed": (
+        "Based on this synthesis note, create a prioritized action list. Structure it as:\n"
+        "1. The top 3 actionable insights, ranked by impact\n"
+        "2. Concrete next steps for each\n"
+        "3. Any dependencies or prerequisites\n"
+        "4. What to do first\n\n"
+        "Write for immediate use. No filler. No intro or outro sentences about the note itself."
+    ),
+}
+
 
 def extract_title(txt_path: Path) -> str:
     name = txt_path.stem
@@ -110,6 +166,92 @@ def to_kebab(title: str) -> str:
     title = re.sub(r"-{2,}", "-", title)
     result = title.strip("-")
     return result if result else "untitled"
+
+
+QUEUE_FILE = SUMMARY_ROOT / "Video Queue.md"
+
+
+def parse_queue_text(text: str, topic: str) -> list[str]:
+    """Return URLs under the matching ## topic heading. Case-insensitive match. Stops at next heading."""
+    urls = []
+    in_section = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            in_section = line[3:].strip().lower() == topic.lower()
+            continue
+        if in_section:
+            stripped = line.strip()
+            if stripped.startswith("http"):
+                urls.append(stripped)
+    return urls
+
+
+def extract_video_id(url: str) -> str:
+    """Extract YouTube video ID from watch?v= or youtu.be/ URLs. Raises ValueError if not found."""
+    match = re.search(r"(?:v=|youtu\.be/)([^&\n?#]+)", url)
+    if not match:
+        raise ValueError(f"Could not extract video ID from URL: {url}")
+    return match.group(1)
+
+
+def get_video_title(video_id: str) -> str:
+    """Fetch video title from YouTube page. Falls back to video_id on any error."""
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        match = re.search(r"<title>(.+?) - YouTube</title>", html)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return video_id
+
+
+def fetch_transcript_text(video_id: str) -> str:
+    """Fetch transcript from YouTube via youtube-transcript-api. Returns newline-joined text."""
+    if YouTubeTranscriptApi is None:
+        raise ImportError("youtube-transcript-api not installed. Run: pip install youtube-transcript-api")
+    transcript = YouTubeTranscriptApi.get_transcript(video_id)
+    return "\n".join(entry["text"] for entry in transcript)
+
+
+def write_transcript_md(title: str, content: str, topic_dir: Path) -> Path:
+    """Write transcript as .md into topic-resources/. Skips if file already exists."""
+    resources_dir = topic_dir / "topic-resources"
+    resources_dir.mkdir(exist_ok=True)
+    md_path = resources_dir / (to_kebab(title) + ".md")
+    if md_path.exists():
+        print(f"  [skip] {md_path.name} already exists")
+        return md_path
+    md_path.write_text(f"# {title}\n\n{content}", encoding="utf-8")
+    print(f"  [fetched] {title} → {md_path.name}")
+    return md_path
+
+
+def fetch_transcripts_from_queue(topic: str, topic_dir: Path) -> None:
+    """Read URLs under ## topic from Video Queue.md and fetch transcripts for each."""
+    if not QUEUE_FILE.exists():
+        raise FileNotFoundError(
+            f"Queue file not found at {QUEUE_FILE}\n"
+            f"Create it or pass transcript files directly as arguments."
+        )
+    text = QUEUE_FILE.read_text(encoding="utf-8")
+    urls = parse_queue_text(text, topic)
+    if not urls:
+        print(f"  [warn] no URLs found under '## {topic}' in Video Queue.md", file=sys.stderr)
+        return
+    print(f"  [queue] found {len(urls)} URL(s) under '## {topic}'")
+    for url in urls:
+        try:
+            video_id = extract_video_id(url)
+            title = get_video_title(video_id)
+            print(f"  [fetch] {title}")
+            content = fetch_transcript_text(video_id)
+            write_transcript_md(title, content, topic_dir)
+        except Exception as e:
+            print(f"  [error] {url}: {e}", file=sys.stderr)
 
 
 def convert_txt_to_md(txt_path: Path, topic_dir: Path) -> Path:
@@ -258,6 +400,7 @@ def synthesize(notebook_id: str, topic_dir: Path, topic: str, content_type: str,
     if not response:
         raise RuntimeError("NotebookLM returned an empty response — try re-running after sources finish processing")
 
+    # Build Obsidian YAML frontmatter
     today = datetime.now().strftime("%Y-%m-%d")
     topic_slug = to_kebab(topic)
 
@@ -276,6 +419,7 @@ def synthesize(notebook_id: str, topic_dir: Path, topic: str, content_type: str,
         f"---\n\n"
     )
 
+    # Wikilinked source list — creates backlinks on each source note in Obsidian
     source_links = ""
     resources_dir = topic_dir / "topic-resources"
     if resources_dir.exists():
@@ -292,9 +436,60 @@ def synthesize(notebook_id: str, topic_dir: Path, topic: str, content_type: str,
     return out_path
 
 
+def run_second_pass(synthesis_path: Path, topic: str, content_type: str) -> Path:
+    """Create temp NotebookLM notebook, upload synthesis, run action prompt, save action file, delete notebook."""
+    if not synthesis_path.exists():
+        raise FileNotFoundError(f"Synthesis file not found: {synthesis_path}")
+
+    timestamp_str = datetime.now().strftime("%Y%m%d%H%M%S")
+    temp_topic = f"_temp_action_{timestamp_str}"
+    print(f"  [second-pass] creating temp notebook (will auto-delete)...")
+    data = _run_notebooklm(["create", temp_topic])
+    temp_notebook_id = data["notebook"]["id"]
+
+    try:
+        print(f"  [second-pass] uploading synthesis as source...")
+        title = synthesis_path.stem
+        _upload_source(temp_notebook_id, synthesis_path, title)
+
+        prompt = ACTION_PROMPT_LIBRARY[content_type]
+        print(f"  [second-pass] running {content_type} action prompt...")
+        response = _run_ask(temp_notebook_id, prompt)
+        if not response:
+            raise RuntimeError("Second pass returned an empty response")
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        topic_slug = to_kebab(topic)
+        frontmatter = (
+            f"---\n"
+            f"tags:\n  - action\n  - youtube/{topic_slug}\n"
+            f"date: {today}\n"
+            f"source-type: {content_type}\n"
+            f"topic: \"{topic}\"\n"
+            f"synthesis: \"[[{synthesis_path.stem}]]\"\n"
+            f"---\n\n"
+        )
+
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        action_path = synthesis_path.parent / f"action-{timestamp}.md"
+        action_path.write_text(frontmatter + response, encoding="utf-8")
+        print(f"  [saved] {action_path.name}")
+        return action_path
+
+    finally:
+        print(f"  [second-pass] deleting temp notebook...")
+        try:
+            subprocess.run(
+                ["notebooklm", "delete", "-n", temp_notebook_id, "-y"],
+                capture_output=True,
+            )
+        except Exception as e:
+            print(f"  [warn] could not delete temp notebook {temp_notebook_id}: {e}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert YouTube transcripts and synthesize via NotebookLM into Obsidian notes."
+        description="Convert YouTube transcripts and synthesize via NotebookLM."
     )
     parser.add_argument(
         "--topic",
@@ -302,52 +497,57 @@ def main():
         help='Topic name (e.g. "Guitar Rigs"). Creates/reuses a folder and NotebookLM notebook.',
     )
     parser.add_argument(
-        "--output-dir",
-        default=str(DEFAULT_OUTPUT),
-        help=f'Root folder for all topic output. Defaults to ./youtube_summary next to this script.',
-    )
-    parser.add_argument(
         "files",
-        nargs="+",
+        nargs="*",
         metavar="FILE",
-        help="One or more .txt transcript files downloaded from YouTube.",
+        help="Optional .txt transcript files. If omitted, URLs are read from Video Queue.md.",
     )
     args = parser.parse_args()
 
-    summary_root = Path(args.output_dir)
-    topic_dir = summary_root / args.topic
+    topic_dir = SUMMARY_ROOT / args.topic
     topic_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n=== yt-summarize: '{args.topic}' ===\n")
 
-    # Step 1: convert
-    print("[1/5] Converting transcripts...")
-    for file_arg in args.files:
-        txt_path = Path(file_arg)
-        if not txt_path.exists():
-            print(f"  [warn] file not found: {file_arg}", file=sys.stderr)
-            continue
-        if txt_path.suffix.lower() != ".txt":
-            print(f"  [warn] expected .txt, got: {file_arg}", file=sys.stderr)
-        convert_txt_to_md(txt_path, topic_dir)
+    # Step 1: fetch/convert
+    if args.files:
+        print("[1/7] Converting transcripts...")
+        for file_arg in args.files:
+            txt_path = Path(file_arg)
+            if not txt_path.exists():
+                print(f"  [warn] file not found: {file_arg}", file=sys.stderr)
+                continue
+            if txt_path.suffix.lower() != ".txt":
+                print(f"  [warn] expected .txt, got: {file_arg}", file=sys.stderr)
+            convert_txt_to_md(txt_path, topic_dir)
+    else:
+        print("[1/7] Fetching transcripts from Video Queue...")
+        fetch_transcripts_from_queue(args.topic, topic_dir)
 
     # Step 2: notebook
-    print("\n[2/5] Resolving NotebookLM notebook...")
+    print("\n[2/7] Resolving NotebookLM notebook...")
     notebook_id = get_or_create_notebook(args.topic, topic_dir)
 
     # Step 3: sources
-    print("\n[3/5] Syncing sources to NotebookLM...")
+    print("\n[3/7] Syncing sources to NotebookLM...")
     sync_sources(notebook_id, topic_dir)
 
     # Step 4: classify
-    print("\n[4/5] Classifying content type...")
+    print("\n[4/7] Classifying content type...")
     content_type, themes = classify_content(notebook_id)
 
-    # Step 5: synthesize
-    print("\n[5/5] Synthesizing...")
+    # Step 6: synthesize
+    print("\n[6/7] Synthesizing...")
     result_path = synthesize(notebook_id, topic_dir, args.topic, content_type, themes)
 
-    print(f"\nDone. Synthesis saved to:\n  {result_path}\n")
+    # Step 7: second pass
+    print("\n[7/7] Running second pass action analysis...")
+    try:
+        action_path = run_second_pass(result_path, args.topic, content_type)
+        print(f"\nDone.\n  Synthesis: {result_path}\n  Action:    {action_path}\n")
+    except Exception as e:
+        print(f"\n  [warn] second pass failed: {e} — synthesis still saved", file=sys.stderr)
+        print(f"\nDone. Synthesis saved to:\n  {result_path}\n")
 
 
 if __name__ == "__main__":

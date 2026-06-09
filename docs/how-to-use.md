@@ -1,186 +1,172 @@
 # yt-summarize: How to Use
 
-Converts YouTube transcript files into Obsidian notes and uses NotebookLM to
-classify the content type, select the best synthesis prompt, and produce a
-structured Obsidian note with YAML frontmatter, `[[wikilinks]]`, and source backlinks.
+Converts YouTube videos into two Obsidian notes per run: a structured synthesis note
+and an action analysis note. Uses NotebookLM to classify content type, select prompts,
+and generate both outputs.
 
 ---
 
-## Prerequisites
+## Setup (first time only)
 
-- Python 3.10+
-- The `notebooklm` CLI installed and authenticated (`notebooklm login`)
-- A Google account with access to NotebookLM
-- The [YouTube Transcript](https://chromewebstore.google.com/detail/youtube-transcript/engkpczbmpjkbbfgkbnoapbbpmhbfind) Chrome extension (or any tool that exports transcripts as `.txt`)
+Install the transcript fetching dependency:
+
+```bash
+pip install youtube-transcript-api
+```
 
 ---
 
-## Using via Claude Code (recommended)
+## Using via Claude (recommended)
 
-If you're using Claude Code, copy `skills/yt-summarize.md` into your Claude skills
-directory and add the CLAUDE.md content to your project. Then just tell Claude what you want:
+Tell Claude what you want:
 
 > "Summarize these videos for a topic called Guitar Rigs"
-> "Add this transcript to my Max for Live notes"
+> "Add this video to my Max for Live notes"
+> "yt-summarize — Guitar Rigs"
 
-Claude will ask for anything missing (topic or files), then run the tool and tell
-you where the synthesis landed.
+Claude will check the Video Queue, ask for anything missing, run the tool, and report
+where both output files landed.
 
----
-
-## Using via command line
-
-### Basic usage
-
-```bash
-py -3 yt-summarize.py --topic "Your Topic" transcript-one.txt transcript-two.txt
-```
-
-Output goes to `youtube_summary/Your Topic/synthesis-YYYY-MM-DD-HHMM.md` next to the script.
-
-### Writing into an Obsidian vault
-
-```bash
-py -3 yt-summarize.py \
-  --topic "Guitar Rigs" \
-  --output-dir "C:\Users\you\YourVault\notes\youtube" \
-  "C:\Users\you\Downloads\Video Title - YouTube.txt"
-```
-
-Replace `--output-dir` with any folder inside your vault. The tool will create
-`<output-dir>/Guitar Rigs/` and write everything there.
+Skill file: `main/AIOS/Skills/yt-summarize.md`
 
 ---
 
-## Workflows
+## Video Queue
 
-### A: New topic, first batch of videos
+All videos are managed through one file:
+`main/AIOS/youtube_summary/Video Queue.md`
 
-**Step 1 — Download transcripts**
+Add URLs as plain lines under a `##` heading matching your topic name:
 
-Open each YouTube video, click the transcript extension, and save the files.
-They'll land in your Downloads folder with the video title as the filename.
+```
+## Guitar Rigs
+https://www.youtube.com/watch?v=xxx
+https://www.youtube.com/watch?v=yyy
+```
+
+When you run the tool with `--topic "Guitar Rigs"`, it reads all URLs under that heading,
+fetches transcripts automatically, and processes them. No browser extension, no manual downloads.
+
+---
+
+## Using via command line (manual)
+
+```bash
+py -3 "C:\Users\haden\Documents\Synced_Vault\main\AIOS\Skills\yt-summarize.py" --topic "Your Topic Name"
+```
+
+---
+
+## Workflow A: New topic, first batch of videos
+
+**Step 1 — Add URLs to Video Queue**
+
+Open `main/AIOS/youtube_summary/Video Queue.md`.
+Add a new `##` heading for your topic and paste in the YouTube URLs:
+
+```
+## DSP Basics
+https://www.youtube.com/watch?v=aaa
+https://www.youtube.com/watch?v=bbb
+```
 
 **Step 2 — Run the tool**
 
 ```bash
-py -3 yt-summarize.py \
-  --topic "Your Topic Name" \
-  --output-dir "/path/to/vault/youtube_summary" \
-  "~/Downloads/Video Title One - YouTube.txt" \
-  "~/Downloads/Video Title Two - YouTube.txt"
+py -3 "C:\Users\haden\Documents\Synced_Vault\main\AIOS\Skills\yt-summarize.py" --topic "DSP Basics"
 ```
 
-**Step 3 — Open the note**
+**Step 3 — Find your notes**
 
+Two files are created:
 ```
-<output-dir>/Your Topic Name/synthesis-YYYY-MM-DD-HHMM.md
+main/AIOS/youtube_summary/DSP Basics/synthesis-YYYY-MM-DD-HHMM.md
+main/AIOS/youtube_summary/DSP Basics/action-YYYY-MM-DD-HHMMSS.md
 ```
 
-The note opens in Obsidian with:
-- **YAML frontmatter** — `tags`, `date`, `source-type`, `topic`, `themes`
-- **Body** structured for the detected content type (tutorial, lecture, interview,
-  narrative, opinion, or mixed) with `[[wikilinks]]` on key concepts
-- **Sources section** — `[[topic-resources/filename]]` links that register as
-  backlinks on each source note
+The **synthesis** note includes YAML frontmatter, body structured for the detected content
+type (tutorial, lecture, interview, narrative, opinion, or mixed), `[[wikilinks]]` on key
+concepts, and source backlinks.
+
+The **action** note contains a type-adapted follow-up — implementation checklist,
+concept application guide, follow-up research map, lesson extraction, position evaluation,
+or prioritized next actions depending on what the synthesis looked like.
 
 ---
 
-### B: Adding videos to an existing topic
+## Workflow B: Adding videos to an existing topic
 
-Re-run with new files and the same topic name. The tool skips anything already
-processed and runs a fresh synthesis across all sources:
-
-```bash
-py -3 yt-summarize.py \
-  --topic "Guitar Rigs" \
-  --output-dir "/path/to/vault/youtube_summary" \
-  "~/Downloads/New Video - YouTube.txt"
-```
-
-A new `synthesis-*.md` is created. The previous one is untouched — you have a
-versioned history; the newest file is the most complete synthesis.
+Add more URLs under the same `##` heading in Video Queue.md and re-run with the same topic name.
+Already-converted transcripts and already-uploaded sources are skipped automatically.
+A new `synthesis-*.md` and `action-*.md` pair is produced. Previous files are untouched.
 
 ---
 
-### C: Re-synthesizing without new videos
+## Workflow C: Re-synthesizing without adding new videos
 
-Pass any already-converted file from the topic folder to trigger a fresh
-classification and synthesis without adding new sources:
+Pass any already-converted `.md` file from the topic folder directly:
 
 ```bash
-py -3 yt-summarize.py \
-  --topic "Guitar Rigs" \
-  --output-dir "/path/to/vault/youtube_summary" \
-  "/path/to/vault/youtube_summary/Guitar Rigs/topic-resources/any-file.md"
+py -3 "C:\Users\haden\Documents\Synced_Vault\main\AIOS\Skills\yt-summarize.py" ^
+  --topic "Guitar Rigs" ^
+  "C:\Users\haden\Documents\Synced_Vault\main\AIOS\youtube_summary\Guitar Rigs\knocked-loose-rig-rundown.md"
 ```
 
-The tool will warn about the `.md` extension, skip conversion (already exists),
-skip upload (already in notebook), and produce a fresh synthesis.
+The tool skips fetching and uploading, runs a fresh synthesis + action pass.
 
 ---
 
 ## Folder structure
 
 ```
-youtube_summary/
+main/AIOS/youtube_summary/
+├── Video Queue.md             ← paste URLs here, organized by ## heading
+├── Help/
+│   └── how-to-use.md          ← you are here
 ├── Guitar Rigs/
-│   ├── notebook-id.txt              ← NotebookLM notebook ID — do not edit
-│   ├── synthesis-2026-06-08-1430.md ← synthesized study note
-│   ├── synthesis-2026-06-09-0900.md ← updated synthesis after adding more videos
-│   └── topic-resources/
-│       ├── knocked-loose-rig-rundown.md
-│       └── another-rig-rundown.md
-└── Max for Live/
-    ├── notebook-id.txt
-    └── ...
+│   ├── notebook-id.txt        ← NotebookLM notebook ID — do not edit
+│   ├── topic-resources/
+│   │   ├── knocked-loose-rig-rundown.md    ← fetched transcript
+│   │   └── another-rig-rundown.md          ← fetched transcript
+│   ├── synthesis-2026-06-08-1430.md        ← structured synthesis note
+│   └── action-2026-06-08-143012.md         ← action analysis note
 ```
-
-- **`topic-resources/`** — individual transcripts, converted to markdown. Readable on their own.
-- **`synthesis-*.md`** — synthesized study notes. Most recent = most complete.
-- **`notebook-id.txt`** — internal state. Do not edit or delete unless you want the tool to create a brand-new notebook for that topic.
 
 ---
 
-## Content types
+## Renaming a topic folder
 
-The tool classifies each batch of sources before synthesizing. The detected type
-is stored in the `source-type` frontmatter field and determines the note structure:
-
-| Type | Used for | Structure |
-|------|----------|-----------|
-| `tutorial` | How-to, step-by-step, workflows | Overview → procedures → techniques → pitfalls |
-| `lecture` | Conceptual, theory, education | Thesis → concepts → frameworks → implications |
-| `interview` | Conversations, multiple speakers | Context → themes → agreements → tensions |
-| `narrative` | Stories, case studies, journeys | Context → arc → decisions → lessons |
-| `opinion` | Arguments, critiques, essays | Thesis → arguments → counterarguments → assessment |
-| `mixed` | Combinations of the above | Thematic headers, flowing prose |
-
-If the classification seems wrong, re-run using Workflow C — it re-classifies fresh each time.
+Safe to rename in Obsidian or Explorer. The `notebook-id.txt` travels with the folder.
+After renaming, use the new folder name as `--topic` in future runs and update the
+`##` heading in `Video Queue.md` to match.
 
 ---
 
 ## Troubleshooting
 
+**`youtube_transcript_api` not found**
+Run: `pip install youtube-transcript-api`
+
+**`TranscriptsDisabled` or `NoTranscriptFound`**
+The video has no available transcript (disabled by the uploader, or auto-captions unavailable).
+Try a different video.
+
 **`notebooklm: command not found`**
-Install the NotebookLM CLI and ensure it's on your PATH. Run `notebooklm login` to authenticate.
+The CLI isn't on your PATH. Find where it's installed and add that directory to PATH, or use the full path.
 
 **`notebooklm error: 401 Unauthorized`**
 Your session expired. Run `notebooklm login` and re-authenticate.
 
+**Second pass failed warning**
+The synthesis was still saved — check the warning message. Common cause: NotebookLM rate limit
+after back-to-back requests. Re-run using Workflow C to generate a fresh action note.
+
 **`[error] failed to upload 'video.md'`**
-Re-run the tool — it skips already-uploaded sources and retries the failed one.
+NotebookLM occasionally rejects uploads. Re-run — already-uploaded sources are skipped, only the failed one retries.
 
-**Synthesis output is thin or generic**
-NotebookLM needs time to finish processing sources. Wait a minute and re-run using Workflow C.
-
-**Content type was misclassified**
-The `source-type` field in the frontmatter shows which prompt was used. Re-run using
-Workflow C to re-classify. Classification falls back to `mixed` if it fails.
+**Synthesis is generic or misses key points**
+NotebookLM needs time to process newly uploaded sources. Wait a minute and re-run via Workflow C.
 
 **`notebook-id.txt` shows a deleted notebook warning**
-The notebook was deleted in NotebookLM. The tool creates a new one and re-uploads
-all sources — this run will take longer than normal.
-
-**The tool warns about `.md` extension**
-Expected behavior in Workflow C when passing an already-converted file. The tool still runs correctly.
+The notebook was deleted. The tool auto-creates a new one and re-uploads all sources.
+This run will take longer than normal.
