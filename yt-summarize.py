@@ -213,8 +213,8 @@ def fetch_transcript_text(video_id: str) -> str:
     """Fetch transcript from YouTube via youtube-transcript-api. Returns newline-joined text."""
     if YouTubeTranscriptApi is None:
         raise ImportError("youtube-transcript-api not installed. Run: pip install youtube-transcript-api")
-    transcript = YouTubeTranscriptApi.get_transcript(video_id)
-    return "\n".join(entry["text"] for entry in transcript)
+    transcript = YouTubeTranscriptApi().fetch(video_id)
+    return "\n".join(entry.text for entry in transcript)
 
 
 def write_transcript_md(title: str, content: str, topic_dir: Path) -> Path:
@@ -430,7 +430,7 @@ def synthesize(notebook_id: str, topic_dir: Path, topic: str, content_type: str,
             )
 
     timestamp = datetime.now().strftime("%Y-%m-%d-%H%M")
-    out_path = topic_dir / f"synthesis-{timestamp}.md"
+    out_path = topic_dir / f"{topic_slug}-synthesis-{timestamp}.md"
     out_path.write_text(frontmatter + response + source_links, encoding="utf-8")
     print(f"  [saved] {out_path.name}")
     return out_path
@@ -471,7 +471,7 @@ def run_second_pass(synthesis_path: Path, topic: str, content_type: str) -> Path
         )
 
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-        action_path = synthesis_path.parent / f"action-{timestamp}.md"
+        action_path = synthesis_path.parent / f"{topic_slug}-action-{timestamp}.md"
         action_path.write_text(frontmatter + response, encoding="utf-8")
         print(f"  [saved] {action_path.name}")
         return action_path

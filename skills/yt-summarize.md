@@ -22,8 +22,8 @@ User wants to summarize YouTube videos, mentions transcript files, says "yt-summ
 
 3. **Report the result** — tell the user where both output files landed:
    ```
-   main/AIOS/youtube_summary/<Topic>/synthesis-YYYY-MM-DD-HHMM.md
-   main/AIOS/youtube_summary/<Topic>/action-YYYY-MM-DD-HHMMSS.md
+   main/AIOS/youtube_summary/<Topic>/<topic-slug>-synthesis-YYYY-MM-DD-HHMM.md
+   main/AIOS/youtube_summary/<Topic>/<topic-slug>-action-YYYY-MM-DD-HHMMSS.md
    ```
 
 ## Video Queue

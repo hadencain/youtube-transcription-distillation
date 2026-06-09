@@ -1,0 +1,16 @@
+# NotebookLM notebook IDs — these are personal and tied to your Google account
+**/notebook-id.txt
+
+# Synthesized notes and source transcripts — output, not source
+youtube_summary/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
